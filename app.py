@@ -316,7 +316,6 @@ with tab2:
     ✅ Viral social media posts  
     ✅ Suspicious headlines  
     """)
-
 with tab3:
     st.warning("""
     ### **⚠️ IMPORTANT DISCLAIMER**
