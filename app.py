@@ -16,10 +16,10 @@ st.set_page_config(
 # ============================================
 # CONFIG & CONSTANTS
 # ============================================
-MODEL_ID = "cardiffnlp/twitter-roberta-base-sentiment-latest"  # Works 100% [web:136]
-
+MODEL_ID = "roar11/fake_news_classifier"
 HF_BASE = "https://router.huggingface.co/hf-inference/models"
 HF_URL = f"{HF_BASE}/{MODEL_ID}"
+
 
 # Get token from Streamlit Secrets (NOT hardcoded)
 HF_TOKEN = st.secrets.get("HF_TOKEN", "")
