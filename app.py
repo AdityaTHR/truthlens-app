@@ -1,364 +1,356 @@
 import streamlit as st
 import requests
-import os
+import json
 
-# Page Configuration
-st.set_page_config(
-    page_title="TruthLens - Fake News Detector",
-    page_icon="🛡️",
-    layout="wide",
-    initial_sidebar_state="collapsed"
-)
+# ----------------------------
+# CONFIG
+# ----------------------------
+st.set_page_config(page_title="TruthLens", page_icon="🛡️", layout="centered")
 
-# Custom CSS
-st.markdown("""
+MODEL_ID = "michelecafagna26/bert-fake-news-detection"
+
+# IMPORTANT:
+# Put your token in Streamlit Cloud Secrets as:
+# HF_TOKEN = "hf_..."
+HF_TOKEN = st.secrets.get("HF_TOKEN", "")
+
+# HF has moved away from the old api-inference endpoint in many setups.
+# Use the router endpoint for HF Inference routing.
+HF_BASE = "https://router.huggingface.co/hf-inference/models"
+HF_URL = f"{HF_BASE}/{MODEL_ID}"
+
+# ----------------------------
+# HELPERS
+# ----------------------------
+def call_hf_fake_news(text: str) -> dict:
+    """
+    Returns:
+      {
+        "ok": bool,
+        "real": float,
+        "fake": float,
+        "status": int,
+        "raw": any,
+        "msg": str
+      }
+    """
+    if not HF_TOKEN:
+        return {"ok": False, "status": 0, "msg": "Missing HF_TOKEN in Streamlit Secrets.", "raw": None}
+
+    headers = {
+        "Authorization": f"Bearer {HF_TOKEN}",
+        "Content-Type": "application/json",
+    }
+
+    payload = {"inputs": text[:512]}  # keep within reasonable size
+    try:
+        r = requests.post(HF_URL, headers=headers, json=payload, timeout=60)
+    except requests.RequestException as e:
+        return {"ok": False, "status": 0, "msg": f"Network error: {e}", "raw": None}
+
+    # Model warming / cold start
+    if r.status_code == 503:
+        return {
+            "ok": False,
+            "status": 503,
+            "msg": "Model is loading on Hugging Face. Wait ~30–60s and click Analyze again.",
+            "raw": safe_json(r),
+        }
+
+    # Auth problems
+    if r.status_code == 401:
+        return {
+            "ok": False,
+            "status": 401,
+            "msg": "Unauthorized (401). Your HF token is missing/invalid/revoked. Update Streamlit Secrets.",
+            "raw": safe_json(r),
+        }
+
+    if not r.ok:
+        return {"ok": False, "status": r.status_code, "msg": r.text[:300], "raw": safe_json(r)}
+
+    data = safe_json(r)
+
+    # Expected: [[{"label":"REAL","score":...},{"label":"FAKE","score":...}]]
+    preds = []
+    if isinstance(data, list) and len(data) > 0 and isinstance(data[0], list):
+        preds = data[0]
+
+    real = 0.0
+    fake = 0.0
+    for p in preds:
+        lab = str(p.get("label", "")).upper()
+        sc = float(p.get("score", 0.0))
+        if "REAL" in lab:
+            real = max(real, sc)
+        if "FAKE" in lab:
+            fake = max(fake, sc)
+
+    s = real + fake
+    if s > 0:
+        real, fake = real / s, fake / s
+
+    return {"ok": True, "status": 200, "real": real, "fake": fake, "raw": data, "msg": "ok"}
+
+
+def safe_json(resp):
+    try:
+        return resp.json()
+    except Exception:
+        return resp.text
+
+
+def verdict_class(real: float, fake: float) -> tuple[str, str]:
+    # Returns (class_name, html_text)
+    if real >= 0.65:
+        return ("authentic", "✅ <strong>LIKELY AUTHENTIC</strong><br>This news appears genuine based on AI analysis.")
+    if fake >= 0.65:
+        return ("fake", "🚨 <strong>LIKELY FAKE</strong><br>This news shows characteristics of misinformation.")
+    return ("uncertain", "⚠️ <strong>UNCERTAIN</strong><br>Analysis inconclusive. Verify with multiple sources.")
+
+# ----------------------------
+# UI (Your same design style)
+# ----------------------------
+st.markdown(
+    """
 <style>
-    .stApp {
+    /* Page background */
+    [data-testid="stAppViewContainer"] {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     }
-    .main {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    [data-testid="stHeader"] { background: rgba(0,0,0,0); }
+    [data-testid="stToolbar"] { right: 2rem; }
+
+    .container {
+        max-width: 900px;
+        margin: 20px auto;
+        background: white;
+        border-radius: 20px;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        overflow: hidden;
     }
-    .stMetric {
-        background: white !important;
-        padding: 15px !important;
-        border-radius: 10px !important;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.1) !important;
-    }
-    .header-box {
-        text-align: center;
-        padding: 35px 20px;
+    .header {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         color: white;
-        border-radius: 15px;
-        margin-bottom: 25px;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+        padding: 35px;
+        text-align: center;
     }
-    .header-box h1 {
-        margin: 0;
-        font-size: 2.5em;
+    .header h1 {
+        font-size: 2.3em;
+        margin: 0 0 6px 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
     }
-    .header-box p {
-        margin: 10px 0 0 0;
-        font-size: 1.15em;
-        opacity: 0.95;
+    .header p { font-size: 1.05em; opacity: 0.9; margin: 0; }
+    .content { padding: 28px; }
+
+    .info-box {
+        background: #e7f3ff;
+        color: #004085;
+        padding: 14px;
+        border-radius: 10px;
+        margin-bottom: 18px;
+        border-left: 5px solid #0066cc;
+        font-size: 0.95em;
+        line-height: 1.6;
+    }
+
+    /* Buttons */
+    .btn-row { display: flex; gap: 12px; margin-top: 10px; }
+    .stButton button {
+        border-radius: 10px !important;
+        font-weight: 700 !important;
+        padding: 0.7rem 1rem !important;
+    }
+    .stButton button[kind="primary"] {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+        border: none !important;
+    }
+
+    /* Result blocks */
+    .result-card {
+        background: #f8f9fa;
+        border-left: 5px solid #667eea;
+        padding: 22px;
+        border-radius: 10px;
+        margin-top: 18px;
+    }
+    .result-label {
+        font-size: 0.9em;
+        color: #666;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        margin-bottom: 8px;
+        font-weight: 700;
+    }
+    .result-value {
+        font-size: 2.4em;
+        font-weight: 800;
+        color: #667eea;
+        margin-bottom: 10px;
+    }
+    .progress-bar {
+        height: 10px;
+        background: #e0e0e0;
+        border-radius: 10px;
+        overflow: hidden;
+        margin-top: 8px;
+    }
+    .progress-fill {
+        height: 100%;
+        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+        border-radius: 10px;
+    }
+
+    .stats {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+        margin-top: 14px;
+    }
+    .stat-item {
+        background: white;
+        padding: 14px;
+        border-radius: 10px;
+        border: 1px solid #ddd;
+        text-align: center;
+    }
+    .stat-label {
+        font-size: 0.9em;
+        color: #666;
+        font-weight: 600;
+    }
+    .stat-value {
+        font-size: 1.6em;
+        font-weight: 800;
+        color: #667eea;
+        margin-top: 4px;
+    }
+
+    .verdict {
+        margin-top: 14px;
+        padding: 16px;
+        border-radius: 10px;
+        text-align: center;
+        font-size: 1.1em;
+        font-weight: 700;
+    }
+    .verdict.authentic { background: #d4edda; color: #155724; border-left: 5px solid #28a745; }
+    .verdict.fake      { background: #f8d7da; color: #721c24; border-left: 5px solid #dc3545; }
+    .verdict.uncertain { background: #fff3cd; color: #856404; border-left: 5px solid #ffc107; }
+
+    .footer {
+        background: #f8f9fa;
+        padding: 16px;
+        text-align: center;
+        color: #666;
+        font-size: 0.9em;
+        border-top: 1px solid #ddd;
+    }
+
+    @media (max-width: 768px) {
+        .header h1 { font-size: 1.7em; }
+        .result-value { font-size: 2em; }
+        .stats { grid-template-columns: 1fr; }
     }
 </style>
-""", unsafe_allow_html=True)
 
-# Get API Token from Streamlit Secrets (SECURE METHOD)
-try:
-    API_KEY = st.secrets["HF_TOKEN"]
-except:
-    API_KEY = os.getenv("HF_TOKEN", "")
-
-# API Configuration
-API_URL = "https://api-inference.huggingface.co/models/michelecafagna26/bert-fake-news-detection"
-
-# Initialize session state
-if 'results' not in st.session_state:
-    st.session_state.results = None
-
-# Header
-st.markdown("""
-<div class="header-box">
-    <h1>🛡️ TruthLens</h1>
+<div class="container">
+  <div class="header">
+    <h1><span>🛡️</span>TruthLens</h1>
     <p>AI-Powered Fake News Detection</p>
+  </div>
+  <div class="content">
+    <div class="info-box">
+      <strong>ℹ️ How it works:</strong> Paste any news article below and our AI will analyze it to detect if it's likely authentic or fake.
+      Results are based on a BERT classifier hosted on Hugging Face.
+    </div>
+  </div>
 </div>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
-# Check if API key exists
-if not API_KEY:
-    st.error("""
-    ❌ **HuggingFace API Token Missing!**
-    
-    Please add your token in:
-    - **Streamlit Cloud:** App Settings → Secrets → Add `HF_TOKEN = "your_token_here"`
-    - **Local:** Create `.streamlit/secrets.toml` with `HF_TOKEN = "your_token_here"`
-    
-    Get token from: https://huggingface.co/settings/tokens
-    """)
-    st.stop()
+# Put Streamlit inputs BELOW, but inside the same visual style by spacing
+container = st.container()
 
-# Info box
-st.info("📝 **How it works:** Paste any news article and our AI will analyze it using BERT machine learning to detect if it's authentic or fake. Results are based on models trained on thousands of articles.")
-
-# Main Tabs
-tab1, tab2, tab3 = st.tabs(["🔍 Analyze News", "📊 How It Works", "⚠️ Disclaimer"])
-
-with tab1:
-    st.subheader("📰 Paste Your News Article")
-    
-    # Input area
+with container:
+    # Main input
     news_text = st.text_area(
-        "News Article:",
-        height=250,
+        "Paste News Article:",
+        height=180,
         placeholder="Paste the news article text here...",
-        label_visibility="collapsed"
     )
-    
-    # Character count
-    char_count = len(news_text)
-    st.caption(f"📊 Characters: {char_count} | Minimum required: 20")
-    
-    # Buttons
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        analyze_btn = st.button("🔍 **ANALYZE NEWS**", use_container_width=True, type="primary")
-    
-    with col2:
-        clear_btn = st.button("🔄 Clear", use_container_width=True)
-    
-    # Clear functionality
-    if clear_btn:
-        st.session_state.results = None
+
+    c1, c2 = st.columns([1, 1])
+    analyze = c1.button("🔍 Analyze News", type="primary", use_container_width=True)
+    clear = c2.button("Clear", use_container_width=True)
+
+    if clear:
+        st.session_state.pop("last_result", None)
         st.rerun()
-    
-    # Analysis Logic
-    if analyze_btn:
-        if not news_text.strip():
-            st.error("❌ Please enter some news text to analyze")
-        
-        elif char_count < 20:
-            st.error("❌ Please enter at least 20 characters")
-        
-        else:
-            with st.spinner("🤖 Analyzing with AI... This may take 10-30 seconds (first time may take longer)"):
-                try:
-                    # Prepare API request
-                    headers = {
-                        "Authorization": f"Bearer {API_KEY}",
-                        "Content-Type": "application/json"
-                    }
-                    
-                    payload = {
-                        "inputs": news_text[:512]  # Limit to 512 characters
-                    }
-                    
-                    # Make request
-                    response = requests.post(API_URL, headers=headers, json=payload, timeout=60)
-                    
-                    # Handle response
-                    if response.status_code == 200:
-                        data = response.json()
-                        
-                        if isinstance(data, list) and len(data) > 0:
-                            results = data[0]
-                            
-                            # Extract scores
-                            real_score = 0.0
-                            fake_score = 0.0
-                            
-                            for item in results:
-                                label = item.get('label', '').upper()
-                                score = item.get('score', 0.0)
-                                
-                                if 'REAL' in label:
-                                    real_score = max(real_score, score)
-                                elif 'FAKE' in label:
-                                    fake_score = max(fake_score, score)
-                            
-                            # Normalize scores
-                            total = real_score + fake_score
-                            if total > 0:
-                                real_score = real_score / total
-                                fake_score = fake_score / total
-                            
-                            # Store results
-                            st.session_state.results = {
-                                'real_score': real_score,
-                                'fake_score': fake_score,
-                                'timestamp': 'Just now'
-                            }
-                            
-                            # Force refresh to show results
-                            st.rerun()
-                        
-                        else:
-                            st.error("❌ Invalid API response format. Please try again.")
-                    
-                    elif response.status_code == 503:
-                        st.warning("""
-                        ⏳ **Model is Loading**
-                        
-                        The AI model is currently loading on HuggingFace servers (this is normal for first use).
-                        
-                        Please wait 30-60 seconds and click **Analyze** again.
-                        """)
-                    
-                    elif response.status_code == 401:
-                        st.error("""
-                        🔑 **Authentication Failed**
-                        
-                        Your HuggingFace token is invalid or expired.
-                        
-                        1. Go to https://huggingface.co/settings/tokens
-                        2. Create new token with 'Read' permission
-                        3. Update in Streamlit Secrets
-                        """)
-                    
-                    else:
-                        error_text = response.text[:300]
-                        st.error(f"❌ API Error {response.status_code}: {error_text}")
-                
-                except requests.exceptions.Timeout:
-                    st.error("⏱️ Request timed out. Please try again.")
-                
-                except Exception as e:
-                    st.error(f"❌ Unexpected error: {str(e)}")
-    
-    # Display Results (if available)
-    if st.session_state.results:
-        st.markdown("---")
-        st.subheader("📊 Analysis Results")
-        
-        results = st.session_state.results
-        real_score = results['real_score']
-        fake_score = results['fake_score']
-        
-        # Metrics Row
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.metric("🟢 Real Probability", f"{int(real_score * 100)}%")
-        
-        with col2:
-            st.metric("🔴 Fake Probability", f"{int(fake_score * 100)}%")
-        
-        with col3:
-            st.metric("⏱️ Analysis Time", "~15 sec")
-        
-        # Progress Bar
-        st.write("**Authenticity Score:**")
-        st.progress(real_score)
-        
-        # Verdict Section
-        st.markdown("---")
-        
-        if real_score > 0.65:
-            st.success(f"""
-            ✅ **LIKELY AUTHENTIC NEWS**
-            
-            This article appears to be genuine based on AI analysis.
-            
-            **Confidence Level: {int(real_score * 100)}%**
-            
-            ℹ️ *Always verify with multiple trusted sources.*
-            """)
-            st.balloons()
-        
-        elif fake_score > 0.65:
-            st.error(f"""
-            🚨 **LIKELY FAKE NEWS**
-            
-            This article shows strong characteristics of misinformation.
-            
-            **Confidence Level: {int(fake_score * 100)}%**
-            
-            ⚠️ *Verify with fact-checking organizations before sharing.*
-            """)
-        
-        else:
-            st.warning(f"""
-            ⚠️ **UNCERTAIN / MIXED SIGNALS**
-            
-            The analysis is inconclusive. This could mean:
-            - Satirical or opinion content
-            - Mixed factual and opinion statements
-            - Needs human fact-checking
-            
-            **Real: {int(real_score * 100)}% | Fake: {int(fake_score * 100)}%**
-            
-            🔍 *Strongly recommend verification with multiple sources.*
-            """)
 
-with tab2:
-    st.subheader("🤖 How Our AI Detection Works")
-    
-    st.markdown("""
-    ### **Technology Stack**
-    
-    - **Model:** BERT (Bidirectional Encoder Representations from Transformers)
-    - **Training Data:** 20,000+ labeled news articles
-    - **Accuracy:** 92-95% on test data
-    - **Processing:** Advanced Natural Language Processing + Deep Learning
-    
-    ### **What We Analyze**
-    
-    1. **Linguistic Patterns** - Detects sensational language typical of fake news
-    2. **Semantic Structure** - Analyzes meaning and logical flow
-    3. **Statistical Features** - Identifies markers of misinformation
-    4. **Contextual Understanding** - BERT reads text bidirectionally for context
-    
-    ### **How BERT Works**
-    
-    - Reads text from left-to-right AND right-to-left simultaneously
-    - Understands context of every word in relation to all other words
-    - Pre-trained on massive text datasets (Wikipedia, books)
-    - Fine-tuned specifically for fake news detection
-    - 12 transformer layers for deep semantic analysis
-    
-    ### **Model Limitations**
-    
-    - ⚠️ Not 100% accurate (92-95% accuracy rate)
-    - ⚠️ Works best on English language text
-    - ⚠️ Requires minimum 20 characters for analysis
-    - ⚠️ May struggle with satire or sarcasm
-    - ⚠️ Should always be supplemented with human verification
-    - ⚠️ Rapidly evolving misinformation tactics may evade detection
-    
-    ### **Best Use Cases**
-    
-    ✅ Political news verification  
-    ✅ Health/medical claims  
-    ✅ Breaking news stories  
-    ✅ Viral social media posts  
-    ✅ Suspicious headlines  
-    """)
-with tab3:
-    st.warning("""
-    ### **⚠️ IMPORTANT DISCLAIMER**
-    
-    **This tool provides AI-based analysis for informational purposes only.**
-    
-    ### **Key Points**
-    
-    - ✓ Results are **predictions**, not definitive facts
-    - ✓ **Always verify** with multiple reliable sources
-    - ✓ AI is **not 100% accurate** (92-95% accuracy)
-    - ✓ Use as a **supplementary tool**, not the final verdict
-    - ✓ Professional fact-checking recommended for critical news
-    - ✓ Keep up with fact-checking organizations (PolitiFact, Snopes, FactCheck.org)
-    - ✓ Misinformation tactics are constantly evolving
-    
-    ### **Recommended Best Practices**
-    
-    1. **Multiple Sources** - Read the same story from 3+ sources
-    2. **Check Dates** - Verify publication dates aren't misleading
-    3. **Author Research** - Look up author credentials
-    4. **Citations** - Check if article cites verifiable sources
-    5. **Updates** - Look for corrections or updated information
-    6. **Fact-Checkers** - Use established fact-checking websites
-    7. **Emotional Check** - Be skeptical of highly emotional language
-    
-    ### **Trusted Fact-Checking Resources**
-    
-    - 🔍 Snopes.com
-    - 🔍 FactCheck.org
-    - 🔍 PolitiFact.com
-    - 🔍 Reuters Fact Check
-    - 🔍 AP Fact Check
-    """)
+    # Validate & run
+    if analyze:
+        t = news_text.strip()
+        if len(t) == 0:
+            st.error("❌ Please enter some news text to analyze.")
+        elif len(t) < 20:
+            st.error("❌ Please enter at least 20 characters.")
+        else:
+            with st.spinner("Analyzing... This may take 10–20 seconds (first time can be slower)."):
+                res = call_hf_fake_news(t)
+            st.session_state["last_result"] = res
 
-# Footer
-st.markdown("---")
-st.markdown("""
-<div style="text-align: center; color: #666; font-size: 0.9em; padding: 20px; background: rgba(255,255,255,0.9); border-radius: 10px;">
-    <p><strong>🛡️ TruthLens v1.0</strong></p>
-    <p>Powered by HuggingFace 🤗 & Streamlit • January 2026</p>
-    <p>Built for truth detection • Use responsibly • Always verify</p>
-    <p>© 2026 AdityaKashyapMohan</p>
+    # Display results
+    res = st.session_state.get("last_result")
+    if res:
+        if not res.get("ok"):
+            st.error(f"❌ {res.get('msg', 'Unknown error')}")
+        else:
+            real = float(res["real"])
+            fake = float(res["fake"])
+            score = round(real * 100)
+            cls, verdict_html = verdict_class(real, fake)
+
+            st.markdown(
+                f"""
+<div class="result-card">
+  <div class="result-label">Authenticity Score</div>
+  <div class="result-value">{score}%</div>
+  <div class="progress-bar">
+    <div class="progress-fill" style="width: {score}%"></div>
+  </div>
+
+  <div class="stats">
+    <div class="stat-item">
+      <div class="stat-label">Real Probability</div>
+      <div class="stat-value">{round(real*100)}%</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-label">Fake Probability</div>
+      <div class="stat-value">{round(fake*100)}%</div>
+    </div>
+  </div>
+
+  <div class="verdict {cls}">
+    {verdict_html}
+  </div>
 </div>
-""", unsafe_allow_html=True)
+""",
+                unsafe_allow_html=True,
+            )
 
+st.markdown(
+    """
+<div class="container">
+  <div class="footer">
+    <strong>⚠️ Disclaimer:</strong> This tool provides AI-based analysis for informational purposes.
+    Always verify with multiple reliable sources. AI predictions are not 100% accurate.
+  </div>
+</div>
+""",
+    unsafe_allow_html=True,
+)
