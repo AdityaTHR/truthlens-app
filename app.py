@@ -18,7 +18,7 @@ st.set_page_config(
 # ============================================
 MODEL_ID = "cardiffnlp/twitter-roberta-base-sentiment-latest"  # Works 100% [web:136]
 
-HF_BASE = "https://api-inference.huggingface.co/models"
+HF_BASE = "https://router.huggingface.co/hf-inference/models"
 HF_URL = f"{HF_BASE}/{MODEL_ID}"
 
 # Get token from Streamlit Secrets (NOT hardcoded)
