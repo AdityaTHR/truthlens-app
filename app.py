@@ -16,7 +16,7 @@ st.set_page_config(
 # ============================================
 # CONFIG & CONSTANTS
 # ============================================
-MODEL_ID = "therealcyberlord/fake-news-classification-distilbert"
+MODEL_ID = "harshhmaniya/fake-news-classification-distilbert-fine-tuned"
 
 
 
