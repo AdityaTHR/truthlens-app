@@ -2,37 +2,17 @@ import streamlit as st
 import requests
 import json
 
-# ----------------------------
-# CONFIG
-# ----------------------------
 st.set_page_config(page_title="TruthLens", page_icon="🛡️", layout="centered")
 
-# ✅ WORKING MODEL (tested - returns REAL/FAKE labels)
-MODEL_ID = "cardiffnlp/twitter-roberta-base-fake-news-detection"
+# ✅ WORKING MODEL + ENDPOINT COMBO (tested)
+MODEL_ID = "Pulk17/Fake-News-Detection"
+HF_URL = f"https://api-inference.huggingface.co/models/{MODEL_ID}"
 
-# Get token from Streamlit Secrets
 HF_TOKEN = st.secrets.get("HF_TOKEN", "")
 
-# ✅ HF ROUTER ENDPOINT
-HF_BASE = "https://router.huggingface.co/hf-inference/models"
-HF_URL = f"{HF_BASE}/{MODEL_ID}"
-
-# ----------------------------
-# HELPERS
-# ----------------------------
 def call_hf_fake_news(text: str) -> dict:
-    """
-    Call HF Inference API for fake news detection.
-    """
     if not HF_TOKEN:
-        return {
-            "ok": False,
-            "status": 0,
-            "msg": "❌ Missing HF_TOKEN. Add it to Streamlit Secrets.",
-            "raw": None,
-            "real": 0.0,
-            "fake": 0.0,
-        }
+        return {"ok": False, "msg": "❌ Add HF_TOKEN to Streamlit Secrets", "real": 0.0, "fake": 0.0}
 
     headers = {
         "Authorization": f"Bearer {HF_TOKEN}",
@@ -43,245 +23,126 @@ def call_hf_fake_news(text: str) -> dict:
 
     try:
         r = requests.post(HF_URL, headers=headers, json=payload, timeout=60)
-    except requests.RequestException as e:
-        return {
-            "ok": False,
-            "status": 0,
-            "msg": f"❌ Network error: {str(e)}",
-            "raw": None,
-            "real": 0.0,
-            "fake": 0.0,
-        }
+    except:
+        return {"ok": False, "msg": "❌ Network error", "real": 0.0, "fake": 0.0}
 
-    # Model warming / cold start
     if r.status_code == 503:
-        return {
-            "ok": False,
-            "status": 503,
-            "msg": "⏳ Model is loading. Wait 30-60 seconds and try again.",
-            "raw": safe_json(r),
-            "real": 0.0,
-            "fake": 0.0,
-        }
-
+        return {"ok": False, "msg": "⏳ Model loading... Wait 30-60s & retry", "real": 0.0, "fake": 0.0}
     if r.status_code == 401:
-        return {
-            "ok": False,
-            "status": 401,
-            "msg": "❌ Unauthorized (401). Check your HF token in Streamlit Secrets.",
-            "raw": safe_json(r),
-            "real": 0.0,
-            "fake": 0.0,
-        }
-
+        return {"ok": False, "msg": "❌ Invalid HF token", "real": 0.0, "fake": 0.0}
     if not r.ok:
-        return {
-            "ok": False,
-            "status": r.status_code,
-            "msg": f"❌ API Error {r.status_code}: {r.text[:200]}",
-            "raw": safe_json(r),
-            "real": 0.0,
-            "fake": 0.0,
-        }
+        return {"ok": False, "msg": f"❌ Error {r.status_code}", "real": 0.0, "fake": 0.0}
 
-    data = safe_json(r)
+    try:
+        data = r.json()
+    except:
+        return {"ok": False, "msg": "❌ Invalid response", "real": 0.0, "fake": 0.0}
 
-    if isinstance(data, dict) and "error" in data:
-        return {
-            "ok": False,
-            "status": r.status_code,
-            "msg": f"❌ HF Error: {data.get('error')}",
-            "raw": data,
-            "real": 0.0,
-            "fake": 0.0,
-        }
-
-    # Parse predictions
-    preds = []
-    if isinstance(data, list) and len(data) > 0:
-        if isinstance(data[0], list):
-            preds = data[0]
-        elif isinstance(data[0], dict):
-            preds = data
-
-    real = 0.0
-    fake = 0.0
+    preds = data[0] if isinstance(data, list) and data else []
+    real, fake = 0.0, 0.0
 
     for p in preds:
-        if not isinstance(p, dict):
-            continue
+        label = str(p.get("label", "")).upper()
+        score = float(p.get("score", 0.0))
+        
+        if "REAL" in label or "LABEL_1" in label:
+            real = max(real, score)
+        if "FAKE" in label or "LABEL_0" in label:
+            fake = max(fake, score)
 
-        lab = str(p.get("label", "")).upper()
-        sc = float(p.get("score", 0.0))
+    total = real + fake
+    if total > 0:
+        real, fake = real/total, fake/total
 
-        # Flexible label matching for different models
-        if any(x in lab for x in ["REAL", "LABEL_1", "POSITIVE", "TRUTHFUL"]):
-            real = max(real, sc)
-        if any(x in lab for x in ["FAKE", "LABEL_0", "NEGATIVE", "FAKE-NEWS"]):
-            fake = max(fake, sc)
+    return {"ok": True, "real": real, "fake": fake}
 
-    # Normalize
-    s = real + fake
-    if s > 0:
-        real, fake = real / s, fake / s
-
-    return {
-        "ok": True,
-        "status": 200,
-        "real": real,
-        "fake": fake,
-        "raw": data,
-        "msg": "✅ Analysis complete",
-    }
-
-
-def safe_json(resp):
-    try:
-        return resp.json()
-    except Exception:
-        return {"error": resp.text[:200]}
-
-
-def verdict_class(real: float, fake: float) -> tuple[str, str]:
+def verdict(real, fake):
     if real >= 0.65:
-        return (
-            "authentic",
-            "✅ <strong>LIKELY AUTHENTIC</strong><br>This news appears genuine based on AI analysis.",
-        )
+        return "authentic", "✅ <strong>LIKELY AUTHENTIC</strong><br>Genuine news based on AI analysis."
     if fake >= 0.65:
-        return (
-            "fake",
-            "🚨 <strong>LIKELY FAKE</strong><br>This news shows characteristics of misinformation.",
-        )
-    return (
-        "uncertain",
-        "⚠️ <strong>UNCERTAIN</strong><br>Analysis inconclusive. Verify with multiple sources.",
-    )
+        return "fake", "🚨 <strong>LIKELY FAKE</strong><br>Shows misinformation characteristics."
+    return "uncertain", "⚠️ <strong>UNCERTAIN</strong><br>Verify with multiple sources."
 
-# ----------------------------
-# UI (same beautiful design)
-# ----------------------------
+# UI
 st.markdown("""
 <style>
-    /* [Same CSS as before - keeping it identical for perfect design] */
-    [data-testid="stAppViewContainer"] {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    }
-    [data-testid="stHeader"] { background: rgba(0,0,0,0); }
-    
-    .container { max-width: 900px; margin: 20px auto; background: white; border-radius: 20px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); overflow: hidden; }
-    .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 40px; text-align: center; }
-    .header h1 { font-size: 2.5em; margin: 0 0 10px 0; display: flex; align-items: center; justify-content: center; gap: 15px; }
-    .header p { font-size: 1.1em; opacity: 0.9; margin: 0; }
-    .content { padding: 40px; }
-    
-    .info-box { background: #e7f3ff; color: #004085; padding: 15px; border-radius: 10px; margin-bottom: 20px; border-left: 5px solid #0066cc; font-size: 0.95em; line-height: 1.6; }
-    
-    .stTextArea textarea { border-radius: 10px !important; border: 2px solid #ddd !important; font-family: 'Segoe UI', sans-serif !important; }
-    .stTextArea textarea:focus { border-color: #667eea !important; box-shadow: 0 0 10px rgba(102, 126, 234, 0.2) !important; }
-    
-    .stButton > button { border-radius: 10px !important; font-weight: 700 !important; padding: 15px 30px !important; font-size: 1.1em !important; }
-    .stButton > button[kind="primary"] { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important; border: none !important; }
-    .stButton > button[kind="secondary"] { color: #667eea !important; border: 2px solid #667eea !important; background: white !important; }
-    
-    .result-card { background: #f8f9fa; border-left: 5px solid #667eea; padding: 25px; border-radius: 10px; margin-top: 20px; }
-    .result-label { font-size: 0.9em; color: #666; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; font-weight: 600; }
-    .result-value { font-size: 2.5em; font-weight: 700; color: #667eea; margin-bottom: 15px; }
-    .progress-bar { height: 10px; background: #e0e0e0; border-radius: 10px; overflow: hidden; margin-top: 10px; }
-    .progress-fill { height: 100%; background: linear-gradient(90deg, #667eea 0%, #764ba2 100%); border-radius: 10px; transition: width 0.5s ease-out; }
-    
-    .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-top: 20px; }
-    .stat-item { background: white; padding: 15px; border-radius: 10px; border: 1px solid #ddd; text-align: center; }
-    .stat-label { font-size: 0.9em; color: #666; font-weight: 600; }
-    .stat-value { font-size: 1.8em; font-weight: 700; color: #667eea; margin-top: 5px; }
-    
-    .verdict { margin-top: 20px; padding: 20px; border-radius: 10px; text-align: center; font-size: 1.2em; font-weight: 600; }
-    .verdict.authentic { background: #d4edda; color: #155724; border-left: 5px solid #28a745; }
-    .verdict.fake { background: #f8d7da; color: #721c24; border-left: 5px solid #dc3545; }
-    .verdict.uncertain { background: #fff3cd; color: #856404; border-left: 5px solid #ffc107; }
-    
-    .footer { background: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 0.9em; border-top: 1px solid #ddd; }
+[data-testid="stAppViewContainer"] {background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);}
+[data-testid="stHeader"] {background: transparent;}
+.container {max-width:900px;margin:20px auto;background:white;border-radius:20px;box-shadow:0 20px 60px rgba(0,0,0,0.3);}
+.header {background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:white;padding:40px;text-align:center;}
+.header h1 {font-size:2.5em;display:flex;align-items:center;justify-content:center;gap:15px;}
+.content {padding:40px;}
+.info-box {background:#e7f3ff;color:#004085;padding:15px;border-radius:10px;margin-bottom:20px;border-left:5px solid #0066cc;}
+.stTextArea textarea {border-radius:10px !important;border:2px solid #ddd !important;}
+.stTextArea textarea:focus {border-color:#667eea !important;box-shadow:0 0 10px rgba(102,126,234,0.2) !important;}
+.stButton>button {border-radius:10px !important;font-weight:700 !important;padding:15px 30px !important;font-size:1.1em !important;}
+.stButton>button[kind="primary"] {background:linear-gradient(135deg,#667eea 0%,#764ba2 100%) !important;border:none !important;}
+.stButton>button[kind="secondary"] {color:#667eea !important;border:2px solid #667eea !important;background:white !important;}
+.result-card {background:#f8f9fa;border-left:5px solid #667eea;padding:25px;border-radius:10px;margin-top:20px;}
+.result-label {font-size:0.9em;color:#666;text-transform:uppercase;letter-spacing:1px;font-weight:600;}
+.result-value {font-size:2.5em;font-weight:700;color:#667eea;margin-bottom:15px;}
+.progress-bar {height:10px;background:#e0e0e0;border-radius:10px;overflow:hidden;margin-top:10px;}
+.progress-fill {height:100%;background:linear-gradient(90deg,#667eea 0%,#764ba2 100%);border-radius:10px;}
+.stats {display:grid;grid-template-columns:1fr 1fr;gap:15px;margin-top:20px;}
+.stat-item {background:white;padding:15px;border-radius:10px;border:1px solid #ddd;text-align:center;}
+.stat-label {font-size:0.9em;color:#666;font-weight:600;}
+.stat-value {font-size:1.8em;font-weight:700;color:#667eea;margin-top:5px;}
+.verdict {margin-top:20px;padding:20px;border-radius:10px;text-align:center;font-size:1.2em;font-weight:600;}
+.verdict.authentic {background:#d4edda;color:#155724;border-left:5px solid #28a745;}
+.verdict.fake {background:#f8d7da;color:#721c24;border-left:5px solid #dc3545;}
+.verdict.uncertain {background:#fff3cd;color:#856404;border-left:5px solid #ffc107;}
+.footer {background:#f8f9fa;padding:20px;text-align:center;color:#666;font-size:0.9em;border-top:1px solid #ddd;}
 </style>
-
 <div class="container">
-  <div class="header">
-    <h1><span>🛡️</span>TruthLens</h1>
-    <p>AI-Powered Fake News Detection</p>
-  </div>
-  <div class="content">
-    <div class="info-box">
-      <strong>ℹ️ How it works:</strong> Paste any news article below. AI analyzes language patterns to detect fake news. 
-      <strong>Model:</strong> cardiffnlp/twitter-roberta-base-fake-news-detection
-    </div>
-  </div>
-</div>
+<div class="header"><h1><span>🛡️</span>TruthLens</h1><p>AI-Powered Fake News Detection</p></div>
+<div class="content">
+<div class="info-box"><strong>ℹ️ Model:</strong> Pulk17/Fake-News-Detection (BERT-based)<br>Paste news → Get authenticity score instantly!</div>
 """, unsafe_allow_html=True)
 
-# MAIN APP
-if "last_result" not in st.session_state:
-    st.session_state.last_result = None
+if "result" not in st.session_state:
+    st.session_state.result = None
 
-with st.container():
+news_text = st.text_area("Paste News Article:", height=150, placeholder="Paste news article here...", key="input")
+col1, col2 = st.columns([1,1])
+if col1.button("🔍 Analyze", type="primary", use_container_width=True):
+    if len(news_text.strip()) < 20:
+        st.error("❌ Enter 20+ characters")
+    else:
+        with st.spinner("Analyzing..."):
+            st.session_state.result = call_hf_fake_news(news_text)
+
+if col2.button("Clear", use_container_width=True):
+    st.session_state.result = None
+    st.rerun()
+
+if st.session_state.result:
+    res = st.session_state.result
     st.markdown('<div class="content">', unsafe_allow_html=True)
     
-    news_text = st.text_area("Paste News Article:", height=150, placeholder="Paste news here...", key="news_input")
-    
-    col1, col2 = st.columns([1, 1])
-    analyze_btn = col1.button("🔍 Analyze News", type="primary", use_container_width=True)
-    clear_btn = col2.button("Clear", use_container_width=True)
-    
-    if clear_btn:
-        st.session_state.last_result = None
-        st.rerun()
-    
-    if analyze_btn:
-        text = news_text.strip()
-        if len(text) < 20:
-            st.error("❌ Enter at least 20 characters")
-        else:
-            with st.spinner("🔄 Analyzing..."):
-                result = call_hf_fake_news(text)
-                st.session_state.last_result = result
-    
-    if st.session_state.last_result:
-        res = st.session_state.last_result
-        if not res["ok"]:
-            st.error(res["msg"])
-        else:
-            real, fake = res["real"], res["fake"]
-            score = round(real * 100)
-            cls, html = verdict_class(real, fake)
-            
-            st.markdown(f'''
+    if not res["ok"]:
+        st.error(res["msg"])
+    else:
+        real, fake = res["real"], res["fake"]
+        score = round(real * 100)
+        cls, html = verdict(real, fake)
+        
+        st.markdown(f'''
 <div class="result-card">
-  <div class="result-label">Authenticity Score</div>
-  <div class="result-value">{score}%</div>
-  <div class="progress-bar">
-    <div class="progress-fill" style="width: {score}%"></div>
-  </div>
-  
-  <div class="stats">
-    <div class="stat-item">
-      <div class="stat-label">Real Probability</div>
-      <div class="stat-value">{round(real*100)}%</div>
-    </div>
-    <div class="stat-item">
-      <div class="stat-label">Fake Probability</div>
-      <div class="stat-value">{round(fake*100)}%</div>
-    </div>
-  </div>
-  
-  <div class="verdict {cls}">{html}</div>
+<div class="result-label">Authenticity Score</div>
+<div class="result-value">{score}%</div>
+<div class="progress-bar"><div class="progress-fill" style="width:{score}%"></div></div>
+<div class="stats">
+<div class="stat-item"><div class="stat-label">Real</div><div class="stat-value">{round(real*100)}%</div></div>
+<div class="stat-item"><div class="stat-label">Fake</div><div class="stat-value">{round(fake*100)}%</div></div>
 </div>
-            ''', unsafe_allow_html=True)
+<div class="verdict {cls}">{html}</div>
+</div>
+        ''', unsafe_allow_html=True)
     
-    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown('</div></div>', unsafe_allow_html=True)
 
-st.markdown('''
-<div class="container">
-  <div class="footer">
-    <strong>⚠️ Disclaimer:</strong> AI-based analysis for informational purposes only. 
-    Always verify with trusted sources.
-  </div>
-</div>
-''', unsafe_allow_html=True)
+st.markdown("""
+<div class="container"><div class="footer">
+<strong>⚠️ Disclaimer:</strong> AI analysis only. Verify with trusted sources.
+</div></div>
+""", unsafe_allow_html=True)
