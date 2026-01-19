@@ -14,7 +14,7 @@ MODEL_ID = "michelecafagna26/bert-fake-news-detection"
 HF_TOKEN = st.secrets.get("HF_TOKEN", "")
 
 # HF Inference API endpoint
-HF_BASE = "https://api-inference.huggingface.co/models"
+HF_BASE = "https://router.huggingface.co/hf-inference/models"
 HF_URL = f"{HF_BASE}/{MODEL_ID}"
 
 # ----------------------------
