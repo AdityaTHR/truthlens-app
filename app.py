@@ -16,7 +16,8 @@ st.set_page_config(
 # ============================================
 # CONFIG & CONSTANTS
 # ============================================
-MODEL_ID = "harshhmaniya/fake-news-classification-distilbert-fine-tuned"
+MODEL_ID = "hamzab/roberta-fake-news-classification"
+
 
 
 
@@ -68,7 +69,8 @@ def call_hf_model(text: str) -> dict:
         "Content-Type": "application/json",
     }
 
-    payload = {"inputs": text[:512]}  # Limit to 512 chars for model
+    payload = {"inputs": f"<title>{text[:256]}<content>{text[:512]}<end>"}
+
 
     try:
         r = requests.post(HF_URL, headers=headers, json=payload, timeout=60)
