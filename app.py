@@ -27,8 +27,8 @@ def load_fake_news_model():
         "text-classification",
         model=model_name,
         tokenizer=model_name,
-        device=-1,  # CPU (use 0 for GPU if available)
-        return_all_scores=True
+        device=-1  # CPU (use 0 for GPU if available)
+
     )
     return classifier
 
@@ -36,46 +36,42 @@ def load_fake_news_model():
 # HELPER FUNCTIONS
 # ============================================
 def call_hf_model(text: str) -> dict:
-    """
-    Run local fake news model inference.
-    
-    Returns:
-      {
-        "ok": bool,
-        "real": float (0.0-1.0),
-        "fake": float (0.0-1.0),
-        "status": int,
-        "msg": str,
-        "raw": any
-      }
-    """
     try:
         model = load_fake_news_model()
-        result = model(text[:512])  # Truncate to 512 chars
-        
-        # Parse output: [{'label': 'LABEL_0', 'score': 0.95}, {'label': 'LABEL_1', 'score': 0.05}]
+
+        # Important: request all scores at call time (consistent parsing)
+        result = model(text[:512], top_k=None)
+
+        # result can be:
+        # A) [[{...}, {...}]]  (nested)
+        # B) [{...}, {...}]    (flat)
+        preds = []
+        if isinstance(result, list) and len(result) > 0:
+            if isinstance(result[0], list):
+                preds = result[0]
+            elif isinstance(result[0], dict):
+                preds = result
+
         real = 0.0
         fake = 0.0
-        
-        for item in result:
-            lab = item['label'].upper()
-            sc = float(item['score'])
-            
-            # Map labels: LABEL_1 or REAL = real, LABEL_0 or FAKE = fake
+        for p in preds:
+            lab = str(p.get("label", "")).upper()
+            sc = float(p.get("score", 0.0))
+
             if any(x in lab for x in ["LABEL_1", "REAL", "TRUE"]):
                 real = max(real, sc)
             elif any(x in lab for x in ["LABEL_0", "FAKE", "FALSE"]):
                 fake = max(fake, sc)
-        
+
         return {
             "ok": True,
             "status": 200,
             "real": real,
             "fake": fake,
             "raw": result,
-            "msg": "✅ Analysis complete"
+            "msg": "✅ Analysis complete",
         }
-    
+
     except Exception as e:
         return {
             "ok": False,
@@ -83,8 +79,9 @@ def call_hf_model(text: str) -> dict:
             "msg": f"❌ Model error: {str(e)}",
             "raw": None,
             "real": 0.0,
-            "fake": 0.0
+            "fake": 0.0,
         }
+
 
 
 def get_verdict(real: float, fake: float) -> tuple:
