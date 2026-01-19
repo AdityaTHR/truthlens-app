@@ -71,20 +71,42 @@ def call_hf_fake_news(text: str) -> dict:
         return {"ok": False, "status": r.status_code, "msg": r.text[:300], "raw": safe_json(r)}
 
     data = safe_json(r)
+    st.write("DEBUG raw HF response:", data)
+
 
     # Expected: [[{"label":"REAL","score":...},{"label":"FAKE","score":...}]]
     preds = []
-    if isinstance(data, list) and len(data) > 0 and isinstance(data[0], list):
-        preds = data[0]
+        # If HF returns an error JSON, stop early
+    if isinstance(data, dict) and "error" in data:
+        return {
+            "ok": False,
+            "status": r.status_code,
+            "msg": f"HF error: {data.get('error')}",
+            "raw": data,
+            "real": 0.0,
+            "fake": 0.0,
+        }
+
+    # Accept both formats:
+    # A) [[{...},{...}]]  (nested)
+    # B) [{...},{...}]    (flat)
+    preds = []
+    if isinstance(data, list) and len(data) > 0:
+        if isinstance(data[0], list):
+            preds = data[0]
+        elif isinstance(data[0], dict):
+            preds = data
 
     real = 0.0
     fake = 0.0
     for p in preds:
         lab = str(p.get("label", "")).upper()
         sc = float(p.get("score", 0.0))
-        if "REAL" in lab:
+
+        # Handle multiple label conventions
+        if ("REAL" in lab) or (lab in {"LABEL_1", "POSITIVE"}):
             real = max(real, sc)
-        if "FAKE" in lab:
+        if ("FAKE" in lab) or (lab in {"LABEL_0", "NEGATIVE"}):
             fake = max(fake, sc)
 
     s = real + fake
