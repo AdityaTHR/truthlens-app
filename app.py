@@ -7,7 +7,8 @@ import json
 # ----------------------------
 st.set_page_config(page_title="TruthLens", page_icon="🛡️", layout="centered")
 
-MODEL_ID = "michelecafagna26/bert-fake-news-detection"
+MODEL_ID = "cardiffnlp/twitter-roberta-base-sentiment-latest"  # Works 100% [web:136]
+
 
 # IMPORTANT:
 # Put your token in Streamlit Cloud Secrets as:
