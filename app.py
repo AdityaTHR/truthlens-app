@@ -16,7 +16,8 @@ st.set_page_config(
 # ============================================
 # CONFIG & CONSTANTS
 # ============================================
-MODEL_ID = "vikram71198/distilroberta-base-finetuned-fake-news-detection"
+MODEL_ID = "therealcyberlord/fake-news-classification-distilbert"
+
 
 
 HF_BASE = "https://router.huggingface.co/hf-inference/models"
