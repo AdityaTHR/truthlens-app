@@ -16,7 +16,9 @@ st.set_page_config(
 # ============================================
 # CONFIG & CONSTANTS
 # ============================================
-MODEL_ID = "roar11/fake_news_classifier"
+MODEL_ID = "vikram71198/distilroberta-base-finetuned-fake-news-detection"
+
+
 HF_BASE = "https://router.huggingface.co/hf-inference/models"
 HF_URL = f"{HF_BASE}/{MODEL_ID}"
 
@@ -141,22 +143,19 @@ def call_hf_model(text: str) -> dict:
         elif isinstance(data[0], dict):
             preds = data
 
-    real = 0.0
+    real = 0.0 
     fake = 0.0
     for p in preds:
         lab = str(p.get("label", "")).upper()
         sc = float(p.get("score", 0.0))
-
-        if "REAL" in lab:
+    
+        if any(x in lab for x in ["REAL", "LABEL_1", "TRUE", "LEGIT"]):
             real = max(real, sc)
-        elif "FAKE" in lab:
+        elif any(x in lab for x in ["FAKE", "LABEL_0", "FALSE"]):
             fake = max(fake, sc)
 
-    s = real + fake
-    if s > 0:
-        real, fake = real / s, fake / s
-
     return {"ok": True, "status": 200, "real": real, "fake": fake, "raw": data, "msg": "ok"}
+
 
 
 
