@@ -147,10 +147,9 @@ def call_hf_model(text: str) -> dict:
         lab = str(p.get("label", "")).upper()
         sc = float(p.get("score", 0.0))
 
-        # Handle multiple label conventions
-        if ("REAL" in lab) or (lab in {"LABEL_1", "POSITIVE"}):
+        if "REAL" in lab:
             real = max(real, sc)
-        if ("FAKE" in lab) or (lab in {"LABEL_0", "NEGATIVE"}):
+        elif "FAKE" in lab:
             fake = max(fake, sc)
 
     s = real + fake
